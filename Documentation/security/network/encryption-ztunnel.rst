@@ -29,8 +29,79 @@ authenticated using mutual TLS before being sent to the destination.
 Generating secrets for authentication
 =====================================
 
-TODO(ldelossa)
+Cilium's ztunnel integration requires a set a set of private keys and
+accompanying to certificates be present via Kubernetes secrets. This follows the
+same pattern as IPsec key injections.
 
+These keys can be generated with the follow bash script prior to deploying
+Cilium.
+
+.. code-block:: bash
+
+   #!/bin/bash
+
+   # == Bootstrap ===
+   openssl genrsa -out bootstrap-private.key 2048
+
+   echo '
+   [ req ]
+   distinguished_name = req_distinguished_name
+   x509_extensions = v3_ca
+   prompt = no
+
+   [ req_distinguished_name ]
+   O = cluster.local
+
+   [ v3_ca ]
+   subjectKeyIdentifier = hash
+   authorityKeyIdentifier = keyid:always,issuer
+   basicConstraints = CA:FALSE
+   keyUsage = digitalSignature, keyEncipherment
+   extendedKeyUsage = serverAuth, clientAuth
+   subjectAltName = @alt_names
+
+   [alt_names]
+   DNS.1 = localhost
+   ' > openssl.conf
+
+   openssl req -x509 -new -nodes -key bootstrap-private.key -sha256 -days 3650 -out bootstrap-root.crt -config openssl.conf
+
+   # == CA ==
+   openssl genrsa -out ca-private.key 2048
+
+   echo '
+   [ req ]
+   distinguished_name = req_distinguished_name
+   x509_extensions = v3_ca
+   prompt = no
+
+   [ req_distinguished_name ]
+   O = cluster.local
+
+   [ v3_ca ]
+   subjectKeyIdentifier = hash
+   authorityKeyIdentifier = keyid:always,issuer
+   basicConstraints = critical, CA:true
+   keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+   ' > openssl.conf
+
+   openssl req -x509 -new -nodes -key ca-private.key -sha256 -days 3650 -out ca-root.crt -config openssl.conf
+
+   kubectl --namespace kube-system create secret generic cilium-ztunnel-secrets \
+         --from-file=bootstrap-private.key=bootstrap-private.key \
+         --from-file=bootstrap-root.crt=bootstrap-root.crt \
+         --from-file=ca-private.key=ca-private.key \
+         --from-file=ca-root.crt=ca-root.crt
+
+The 'bootstrap' keys are used to secure the connection between ztunnel and
+Cilium's xDS and certificate server implementation.
+
+The 'ca' keys are used as the root certificate for creating in-memory and
+ephemeral client certificates on ztunnel's request.
+
+The certificate configuration values are pulled directly from a stock
+ambient mesh deployment to ensure compatibility. Changing these values may result
+in a broken ztunnel integration.
 
 Enable ztunnel in Cilium
 ========================
