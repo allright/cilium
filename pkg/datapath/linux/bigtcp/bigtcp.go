@@ -13,6 +13,7 @@ import (
 
 	"github.com/cilium/cilium/pkg/datapath/linux/safenetlink"
 	"github.com/cilium/cilium/pkg/datapath/tables"
+	"github.com/cilium/cilium/pkg/datapath/tunnel"
 	"github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
@@ -199,6 +200,17 @@ func probeTSOMaxSize(log *slog.Logger, devices []string) int {
 	return maxSize
 }
 
+func probeTSOBIGTCP(device string) bool {
+	link, err := safenetlink.LinkByName(device)
+	if err == nil {
+		tso := int(link.Attrs().TSOMaxSize)
+		if tso > defaultGSOMaxSize {
+			return true
+		}
+	}
+	return false
+}
+
 type params struct {
 	cell.In
 
@@ -208,12 +220,13 @@ type params struct {
 	IPsecConfig  types.IPsecConfig
 	DB           *statedb.DB
 	Devices      statedb.Table[*tables.Device]
+	TunnelConfig tunnel.Config
 }
 
-func validateConfig(cfg types.BigTCPUserConfig, daemonCfg *option.DaemonConfig, ipsecCfg types.IPsecConfig) error {
+func validateConfig(cfg types.BigTCPUserConfig, daemonCfg *option.DaemonConfig, ipsecCfg types.IPsecConfig, tunnelConfig tunnel.Config) error {
 	if cfg.EnableIPv6BIGTCP || cfg.EnableIPv4BIGTCP {
-		if daemonCfg.TunnelingEnabled() {
-			return errors.New("BIG TCP is not supported in tunneling mode")
+		if daemonCfg.TunnelingEnabled() && !probeTSOBIGTCP(tunnelConfig.DeviceName()) {
+			return errors.New("BIG TCP in tunneling mode requires pending kernel support")
 		}
 		if ipsecCfg.Enabled() {
 			return errors.New("BIG TCP is not supported with encryption enabled")
@@ -226,7 +239,7 @@ func validateConfig(cfg types.BigTCPUserConfig, daemonCfg *option.DaemonConfig, 
 }
 
 func newBIGTCP(lc cell.Lifecycle, p params) (*Configuration, error) {
-	if err := validateConfig(p.UserConfig, p.DaemonConfig, p.IPsecConfig); err != nil {
+	if err := validateConfig(p.UserConfig, p.DaemonConfig, p.IPsecConfig, p.TunnelConfig); err != nil {
 		return nil, err
 	}
 	cfg := newDefaultConfiguration(p.UserConfig)
@@ -243,6 +256,10 @@ func startBIGTCP(p params, cfg *Configuration) error {
 
 	nativeDevices, _ := tables.SelectedDevices(p.Devices, p.DB.ReadTxn())
 	deviceNames := tables.DeviceNames(nativeDevices)
+	tunnelDevice := ""
+	if p.DaemonConfig.TunnelingEnabled() {
+		tunnelDevice = p.TunnelConfig.DeviceName()
+	}
 
 	disableMsg := ""
 	if len(deviceNames) == 0 {
@@ -280,6 +297,10 @@ func startBIGTCP(p params, cfg *Configuration) error {
 	if haveIPv6 {
 		cfg.groIPv6MaxSize = defaultGROMaxSize
 		cfg.gsoIPv6MaxSize = defaultGSOMaxSize
+	}
+
+	if tunnelDevice != "" {
+		deviceNames = append([]string{tunnelDevice}, deviceNames...)
 	}
 
 	if p.UserConfig.EnableIPv6BIGTCP || p.UserConfig.EnableIPv4BIGTCP {
