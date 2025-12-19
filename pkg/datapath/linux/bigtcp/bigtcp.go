@@ -30,8 +30,9 @@ const (
 )
 
 var defaultUserConfig = types.BigTCPUserConfig{
-	EnableIPv6BIGTCP: false,
-	EnableIPv4BIGTCP: false,
+	EnableIPv6BIGTCP:   false,
+	EnableIPv4BIGTCP:   false,
+	EnableTunnelBIGTCP: false,
 }
 
 var Cell = cell.Module(
@@ -47,10 +48,10 @@ var Cell = cell.Module(
 func newDefaultConfiguration(userConfig types.BigTCPUserConfig) *Configuration {
 	return &Configuration{
 		BigTCPUserConfig: userConfig,
-		groIPv4MaxSize:   defaultGROMaxSize,
-		gsoIPv4MaxSize:   defaultGSOMaxSize,
-		groIPv6MaxSize:   defaultGROMaxSize,
-		gsoIPv6MaxSize:   defaultGSOMaxSize,
+		groIPv4MaxSize:   0,
+		gsoIPv4MaxSize:   0,
+		groIPv6MaxSize:   0,
+		gsoIPv6MaxSize:   0,
 	}
 }
 
@@ -114,7 +115,7 @@ func setGROGSOIPv6MaxSize(log *slog.Logger, userConfig types.BigTCPUserConfig, d
 	// size matches the target size we need).
 	if (int(attrs.GROMaxSize) == GROMaxSize && int(attrs.GSOMaxSize) == GSOMaxSize) ||
 		(!userConfig.EnableIPv6BIGTCP &&
-			int(attrs.GROMaxSize) <= GROMaxSize &&
+			int(attrs.GROMaxSize) <= GROMaxSize && // TODO: double-check, sus
 			int(attrs.GSOMaxSize) <= GSOMaxSize) {
 		return nil
 	}
@@ -200,17 +201,6 @@ func probeTSOMaxSize(log *slog.Logger, devices []string) int {
 	return maxSize
 }
 
-func probeTSOBIGTCP(device string) bool {
-	link, err := safenetlink.LinkByName(device)
-	if err == nil {
-		tso := int(link.Attrs().TSOMaxSize)
-		if tso > defaultGSOMaxSize {
-			return true
-		}
-	}
-	return false
-}
-
 type params struct {
 	cell.In
 
@@ -225,8 +215,8 @@ type params struct {
 
 func validateConfig(cfg types.BigTCPUserConfig, daemonCfg *option.DaemonConfig, ipsecCfg types.IPsecConfig, tunnelConfig tunnel.Config) error {
 	if cfg.EnableIPv6BIGTCP || cfg.EnableIPv4BIGTCP {
-		if daemonCfg.TunnelingEnabled() && !probeTSOBIGTCP(tunnelConfig.DeviceName()) {
-			return errors.New("BIG TCP in tunneling mode requires pending kernel support")
+		if daemonCfg.TunnelingEnabled() && !cfg.EnableTunnelBIGTCP {
+			return errors.New("BIG TCP in tunneling mode requires pending kernel support and needs to be enabled by enable-tunnel-big-tcp")
 		}
 		if ipsecCfg.Enabled() {
 			return errors.New("BIG TCP is not supported with encryption enabled")
