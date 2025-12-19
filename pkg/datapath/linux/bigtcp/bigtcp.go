@@ -200,16 +200,13 @@ func probeTSOMaxSize(log *slog.Logger, devices []string) int {
 	return maxSize
 }
 
-func probeTSOBIGTCP(log *slog.Logger, device string) bool {
+func probeTSOBIGTCP(device string) bool {
 	link, err := safenetlink.LinkByName(device)
 	if err == nil {
 		tso := int(link.Attrs().TSOMaxSize)
-		log.Warn("BIG TCP VXLAN tso_max_size", logfields.Device, device, logfields.GsoMaxSize, tso, logfields.Size, defaultGSOMaxSize)
 		if tso > defaultGSOMaxSize {
 			return true
 		}
-	} else {
-		log.Warn("BIG TCP err", logfields.Device, device, logfields.Error, err)
 	}
 	return false
 }
@@ -226,9 +223,9 @@ type params struct {
 	TunnelConfig tunnel.Config
 }
 
-func validateConfig(log *slog.Logger, cfg types.BigTCPUserConfig, daemonCfg *option.DaemonConfig, ipsecCfg types.IPsecConfig, tunnelConfig tunnel.Config) error {
+func validateConfig(cfg types.BigTCPUserConfig, daemonCfg *option.DaemonConfig, ipsecCfg types.IPsecConfig, tunnelConfig tunnel.Config) error {
 	if cfg.EnableIPv6BIGTCP || cfg.EnableIPv4BIGTCP {
-		if daemonCfg.TunnelingEnabled() && !probeTSOBIGTCP(log, tunnelConfig.DeviceName()) {
+		if daemonCfg.TunnelingEnabled() && !probeTSOBIGTCP(tunnelConfig.DeviceName()) {
 			return errors.New("BIG TCP in tunneling mode requires pending kernel support")
 		}
 		if ipsecCfg.Enabled() {
@@ -242,7 +239,7 @@ func validateConfig(log *slog.Logger, cfg types.BigTCPUserConfig, daemonCfg *opt
 }
 
 func newBIGTCP(lc cell.Lifecycle, p params) (*Configuration, error) {
-	if err := validateConfig(p.Log, p.UserConfig, p.DaemonConfig, p.IPsecConfig, p.TunnelConfig); err != nil {
+	if err := validateConfig(p.UserConfig, p.DaemonConfig, p.IPsecConfig, p.TunnelConfig); err != nil {
 		return nil, err
 	}
 	cfg := newDefaultConfiguration(p.UserConfig)
