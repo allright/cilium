@@ -557,12 +557,6 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *datapath.LocalNodeC
 		cDefinesMap["TUNNEL_MODE"] = "1"
 	}
 
-	ciliumNetLink, err := safenetlink.LinkByName(defaults.SecondHostDevice)
-	if err != nil {
-		return fmt.Errorf("failed to look up link '%s': %w", defaults.SecondHostDevice, err)
-	}
-	cDefinesMap["CILIUM_NET_MAC"] = fmt.Sprintf("{.addr=%s}", mac.CArrayString(ciliumNetLink.Attrs().HardwareAddr))
-
 	ephemeralMin, err := getEphemeralPortRangeMin(h.sysctl)
 	if err != nil {
 		return fmt.Errorf("getting ephemeral port range minimun: %w", err)
