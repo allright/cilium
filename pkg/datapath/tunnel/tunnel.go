@@ -5,7 +5,6 @@ package tunnel
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/cilium/hive/cell"
 	"github.com/spf13/pflag"
@@ -37,14 +36,14 @@ const (
 
 func (tp EncapProtocol) String() string { return string(tp) }
 
-func (tp EncapProtocol) toDpID() string {
+func (tp EncapProtocol) ToDpID() uint8 {
 	switch tp {
 	case VXLAN:
-		return "1"
+		return 1
 	case Geneve:
-		return "2"
+		return 2
 	default:
-		return ""
+		return 0
 	}
 }
 
@@ -201,9 +200,6 @@ func (cfg Config) datapathConfigProvider() (dpcfgdef.NodeOut, dpcfgdef.NodeFnOut
 	definesFn := func() (dpcfgdef.Map, error) { return nil, nil }
 
 	if cfg.EncapProtocol() != Disabled {
-		defines[fmt.Sprintf("TUNNEL_PROTOCOL_%s", strings.ToUpper(VXLAN.String()))] = VXLAN.toDpID()
-		defines[fmt.Sprintf("TUNNEL_PROTOCOL_%s", strings.ToUpper(Geneve.String()))] = Geneve.toDpID()
-		defines["TUNNEL_PROTOCOL"] = cfg.EncapProtocol().toDpID()
 		defines["TUNNEL_SRC_PORT_LOW"] = fmt.Sprintf("%d", cfg.SrcPortLow())
 		defines["TUNNEL_SRC_PORT_HIGH"] = fmt.Sprintf("%d", cfg.SrcPortHigh())
 

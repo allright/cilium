@@ -141,6 +141,14 @@ type LocalNodeConfiguration struct {
 	// This field is immutable at runtime. The value will not change in
 	// subsequent calls to NodeConfigurationChanged().
 	EnableEncapsulation bool
+
+	// TunnelProtocol is the datapath ID of the encapsulation protocol
+	// (0 if disabled, 1 for VXLAN, 2 for Geneve).
+	//
+	// This field is immutable at runtime. The value will not change in
+	// subsequent calls to NodeConfigurationChanged().
+	TunnelProtocol uint8
+
 	// TunnelPort is the UDP port used by the tunnel protocol (0 if disabled).
 	//
 	// This field is immutable at runtime. The value will not change in
