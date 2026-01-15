@@ -40,9 +40,10 @@ type Input struct {
 }
 
 // GatewayAPI translates Gateway API resources into a model.
-func GatewayAPI(input Input) ([]model.HTTPListener, []model.TLSPassthroughListener) {
+func GatewayAPI(input Input) ([]model.HTTPListener, []model.TLSPassthroughListener, []uint32) {
 	var resHTTP []model.HTTPListener
 	var resTLSPassthrough []model.TLSPassthroughListener
+	var udpPorts []uint32
 
 	labels := make(map[string]string)
 	annotations := make(map[string]string)
@@ -79,6 +80,12 @@ func GatewayAPI(input Input) ([]model.HTTPListener, []model.TLSPassthroughListen
 	}
 
 	for _, l := range input.Gateway.Spec.Listeners {
+		// Collect UDP ports for HTTP/3 QUIC support
+		if l.Protocol == gatewayv1.UDPProtocolType {
+			udpPorts = append(udpPorts, uint32(l.Port))
+			continue
+		}
+
 		if l.Protocol != gatewayv1.HTTPProtocolType &&
 			l.Protocol != gatewayv1.HTTPSProtocolType &&
 			l.Protocol != gatewayv1.TLSProtocolType {
@@ -128,7 +135,7 @@ func GatewayAPI(input Input) ([]model.HTTPListener, []model.TLSPassthroughListen
 		})
 	}
 
-	return resHTTP, resTLSPassthrough
+	return resHTTP, resTLSPassthrough, udpPorts
 }
 
 func getBackendServiceName(namespace string, services []corev1.Service, serviceImports []mcsapiv1alpha1.ServiceImport, backendObjectReference gatewayv1.BackendObjectReference) (string, error) {
