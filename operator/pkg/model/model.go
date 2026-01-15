@@ -18,8 +18,6 @@ import (
 type Model struct {
 	HTTP           []HTTPListener           `json:"http,omitempty"`
 	TLSPassthrough []TLSPassthroughListener `json:"tls_passthrough,omitempty"`
-	// UDPPorts contains ports that have UDP listeners configured (e.g., for HTTP/3 QUIC)
-	UDPPorts []uint32 `json:"udp_ports,omitempty"`
 	// CircuitBreakers maps Service keys (format: "namespace/name:port") to CiliumEnvoyCircuitBreaker CRDs
 	// This field is populated from Service annotations and used during cluster creation.
 	CircuitBreakers map[string]interface{} `json:"circuit_breakers,omitempty"`
@@ -546,24 +544,13 @@ func (m *Model) AllPorts() []uint32 {
 	var ports []uint32
 	ports = append(ports, m.HTTPPorts()...)
 	ports = append(ports, m.TLSPassthroughPorts()...)
-	ports = append(ports, m.UDPPorts...)
 	return slices.SortedUnique(ports)
-}
-
-// HasUDPPort returns true if the model has a UDP listener on the specified port.
-func (m *Model) HasUDPPort(port uint32) bool {
-	for _, p := range m.UDPPorts {
-		if p == port {
-			return true
-		}
-	}
-	return false
 }
 
 // HasHTTPSPort returns true if the model has an HTTPS listener on the specified port.
 func (m *Model) HasHTTPSPort(port uint32) bool {
-	for _, listener := range m.HTTP {
-		if listener.Port == port && len(listener.TLS) > 0 {
+	for _, l := range m.HTTP {
+		if l.Port == port && len(l.TLS) > 0 {
 			return true
 		}
 	}

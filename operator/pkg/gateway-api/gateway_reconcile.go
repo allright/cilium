@@ -159,7 +159,7 @@ func (r *gatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	tlsRoutes := r.filterTLSRoutesByGateway(ctx, gw, tlsRouteList.Items)
 	grpcRoutes := r.filterGRPCRoutesByGateway(ctx, gw, grpcRouteList.Items)
 
-	httpListeners, tlsPassthroughListeners, udpPorts := ingestion.GatewayAPI(ingestion.Input{
+	httpListeners, tlsPassthroughListeners := ingestion.GatewayAPI(ingestion.Input{
 		GatewayClass:       *gwc,
 		GatewayClassConfig: r.getGatewayClassConfig(ctx, gwc),
 		Gateway:            *gw,
@@ -189,7 +189,6 @@ func (r *gatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// Step 3: Translate the listeners into Cilium model
 	m := &model.Model{
-		UDPPorts: udpPorts,
 		HTTP:           httpListeners,
 		TLSPassthrough: tlsPassthroughListeners,
 	}
