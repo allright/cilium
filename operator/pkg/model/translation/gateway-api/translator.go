@@ -182,8 +182,8 @@ func (t *gatewayAPITranslator) toServicePorts(ports []uint32, m *model.Model) []
 			Protocol: corev1.ProtocolTCP,
 		})
 
-		// UDP port - only for HTTPS (HTTP/3 support)
-		if m != nil && m.HasHTTPSPort(p) {
+		// UDP port - only for HTTPS with HTTP/3 enabled
+		if t.cfg.HTTP3Enabled && m != nil && m.HasHTTPSPort(p) {
 			servicePorts = append(servicePorts, corev1.ServicePort{
 				Name:     fmt.Sprintf("port-%d-udp", p),
 				Port:     int32(p),

@@ -239,19 +239,20 @@ func (i *cecTranslator) desiredEnvoyListener(m *model.Model) ([]ciliumv2.XDSReso
 	}
 	resources := []ciliumv2.XDSResource{res}
 
-	// Create UDP listener for HTTP/3 QUIC automatically for each HTTPS port
-	// This allows HTTP/3 to work on any HTTPS port without requiring explicit UDP listener in Gateway API
-	for _, httpsPort := range m.HTTPSPorts() {
-		udpListener, err := i.desiredQuicListener(m, httpsPort)
-		if err != nil {
-			return nil, err
-		}
-		if udpListener != nil {
-			udpRes, err := toXdsResource(udpListener, envoy.ListenerTypeURL)
+	// Create UDP listener for HTTP/3 QUIC if enabled in config
+	if i.Config.HTTP3Enabled {
+		for _, httpsPort := range m.HTTPSPorts() {
+			udpListener, err := i.desiredQuicListener(m, httpsPort)
 			if err != nil {
 				return nil, err
 			}
-			resources = append(resources, udpRes)
+			if udpListener != nil {
+				udpRes, err := toXdsResource(udpListener, envoy.ListenerTypeURL)
+				if err != nil {
+					return nil, err
+				}
+				resources = append(resources, udpRes)
+			}
 		}
 	}
 
