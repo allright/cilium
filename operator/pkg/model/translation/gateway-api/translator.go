@@ -175,24 +175,19 @@ func (t *gatewayAPITranslator) toServicePorts(ports []uint32, m *model.Model) []
 
 	servicePorts := make([]corev1.ServicePort, 0, len(uniquePorts))
 	for p := range uniquePorts {
-		// For HTTPS ports, add both TCP and UDP ports
-		// UDP port is automatically added for HTTP/3 support when HTTPS listener is present
+		// TCP port - always added
+		servicePorts = append(servicePorts, corev1.ServicePort{
+			Name:     fmt.Sprintf("port-%d", p),
+			Port:     int32(p),
+			Protocol: corev1.ProtocolTCP,
+		})
+
+		// UDP port - only for HTTPS (HTTP/3 support)
 		if m != nil && m.HasHTTPSPort(p) {
-			servicePorts = append(servicePorts, corev1.ServicePort{
-				Name:     fmt.Sprintf("port-%d-tcp", p),
-				Port:     int32(p),
-				Protocol: corev1.ProtocolTCP,
-			})
 			servicePorts = append(servicePorts, corev1.ServicePort{
 				Name:     fmt.Sprintf("port-%d-udp", p),
 				Port:     int32(p),
 				Protocol: corev1.ProtocolUDP,
-			})
-		} else {
-			servicePorts = append(servicePorts, corev1.ServicePort{
-				Name:     fmt.Sprintf("port-%d", p),
-				Port:     int32(p),
-				Protocol: corev1.ProtocolTCP,
 			})
 		}
 	}
