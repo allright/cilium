@@ -175,9 +175,9 @@ func (t *gatewayAPITranslator) toServicePorts(ports []uint32, m *model.Model) []
 
 	servicePorts := make([]corev1.ServicePort, 0, len(uniquePorts))
 	for p := range uniquePorts {
-		// For port 443, check if HTTPS listener exists and add both TCP and UDP ports
+		// For HTTPS ports, add both TCP and UDP ports
 		// UDP port is automatically added for HTTP/3 support when HTTPS listener is present
-		if p == 443 && m != nil && m.HasHTTPSPort(443) {
+		if m != nil && m.HasHTTPSPort(p) {
 			servicePorts = append(servicePorts, corev1.ServicePort{
 				Name:     fmt.Sprintf("port-%d-tcp", p),
 				Port:     int32(p),

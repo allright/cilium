@@ -239,11 +239,10 @@ func (i *cecTranslator) desiredEnvoyListener(m *model.Model) ([]ciliumv2.XDSReso
 	}
 	resources := []ciliumv2.XDSResource{res}
 
-	// Create UDP listener for HTTP/3 QUIC automatically if HTTPS listener is configured on port 443
-	// This allows HTTP/3 to work on the same port as HTTPS without requiring explicit UDP listener in Gateway API
-	// We check if there's an HTTPS listener on port 443, and if so, automatically create UDP listener for HTTP/3
-	if m.IsHTTPSListenerConfigured() && m.HasHTTPSPort(443) {
-		udpListener, err := i.desiredQuicListener(m)
+	// Create UDP listener for HTTP/3 QUIC automatically for each HTTPS port
+	// This allows HTTP/3 to work on any HTTPS port without requiring explicit UDP listener in Gateway API
+	for _, httpsPort := range m.HTTPSPorts() {
+		udpListener, err := i.desiredQuicListener(m, httpsPort)
 		if err != nil {
 			return nil, err
 		}
@@ -584,8 +583,8 @@ func toQuicTransportSocket(ciliumSecretNamespace string, tls []model.TLSSecret) 
 	}
 }
 
-// desiredQuicListener creates a UDP listener with QUIC transport for HTTP/3
-func (i *cecTranslator) desiredQuicListener(m *model.Model) (*envoy_config_listener.Listener, error) {
+// desiredQuicListener creates a UDP listener with QUIC transport for HTTP/3 on the specified port
+func (i *cecTranslator) desiredQuicListener(m *model.Model, port uint32) (*envoy_config_listener.Listener, error) {
 	// Get TLS secrets from HTTPS listeners (same certificates as HTTPS)
 	tlsToHostnames := m.TLSSecretsToHostnames()
 	if len(tlsToHostnames) == 0 {
@@ -652,9 +651,9 @@ func (i *cecTranslator) desiredQuicListener(m *model.Model) (*envoy_config_liste
 	}
 
 	// Create UDP listener with Host Network and IPv6 support
-	udpAddress, additionalAddresses := getHostNetworkUDPListenerAddresses(443, i.Config.IPConfig.IPv4Enabled, i.Config.IPConfig.IPv6Enabled)
+	udpAddress, additionalAddresses := getHostNetworkUDPListenerAddresses(port, i.Config.IPConfig.IPv4Enabled, i.Config.IPConfig.IPv6Enabled)
 	udpListener := &envoy_config_listener.Listener{
-		Name:      fmt.Sprintf("%s-udp", listenerName),
+		Name:      fmt.Sprintf("%s-udp-%d", listenerName, port),
 		Address:   udpAddress,
 		ReusePort: true, // Important for QUIC
 		UdpListenerConfig: &envoy_config_listener.UdpListenerConfig{
