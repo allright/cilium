@@ -16,10 +16,12 @@ import (
 	envoy_extensions_listener_tls_inspector_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/tls_inspector/v3"
 	httpConnectionManagerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	envoy_extensions_filters_network_tcp_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
+	envoy_extensions_transport_sockets_quic_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/quic/v3"
 	envoy_extensions_transport_sockets_tls_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/cilium/cilium/operator/pkg/model"
 	"github.com/cilium/cilium/pkg/envoy"
@@ -40,6 +42,7 @@ const (
 	tlsInspectorType          = "envoy.filters.listener.tls_inspector"
 	proxyProtocolType         = "envoy.filters.listener.proxy_protocol"
 	tlsTransportSocketType    = "envoy.transport_sockets.tls"
+	quicTransportSocketType   = "envoy.transport_sockets.quic"
 
 	rawBufferTransportProtocol = "raw_buffer"
 	tlsTransportProtocol       = "tls"
@@ -234,7 +237,25 @@ func (i *cecTranslator) desiredEnvoyListener(m *model.Model) ([]ciliumv2.XDSReso
 	if err != nil {
 		return nil, err
 	}
-	return []ciliumv2.XDSResource{res}, nil
+	resources := []ciliumv2.XDSResource{res}
+
+	// Create UDP listener for HTTP/3 QUIC automatically for each HTTPS port
+	// This allows HTTP/3 to work on any HTTPS port without requiring explicit UDP listener in Gateway API
+	for _, httpsPort := range m.HTTPSPorts() {
+		udpListener, err := i.desiredQuicListener(m, httpsPort)
+		if err != nil {
+			return nil, err
+		}
+		if udpListener != nil {
+			udpRes, err := toXdsResource(udpListener, envoy.ListenerTypeURL)
+			if err != nil {
+				return nil, err
+			}
+			resources = append(resources, udpRes)
+		}
+	}
+
+	return resources, nil
 }
 
 func (i *cecTranslator) filterChains(name string, m *model.Model) ([]*envoy_config_listener.FilterChain, error) {
@@ -355,26 +376,33 @@ func (i *cecTranslator) httpsFilterChains(name string, m *model.Model) ([]*envoy
 	return filterChains, nil
 }
 
-func getHostNetworkListenerAddresses(ports []uint32, ipv4Enabled, ipv6Enabled bool) (*envoy_config_core_v3.Address, []*envoy_config_listener.AdditionalAddress) {
-	if len(ports) == 0 || (!ipv4Enabled && !ipv6Enabled) {
+// getListenerAddresses creates listener addresses for the given ports, protocol and IP configuration.
+// It returns the primary address and additional addresses for dual-stack support.
+func getListenerAddresses(ports []uint32, protocol envoy_config_core_v3.SocketAddress_Protocol, ipv4Enabled, ipv6Enabled bool) (*envoy_config_core_v3.Address, []*envoy_config_listener.AdditionalAddress) {
+	if len(ports) == 0 {
 		return nil, nil
 	}
 
-	bindAddresses := []string{}
+	// Build list of bind addresses based on IP configuration
+	var bindAddresses []string
 	if ipv4Enabled {
 		bindAddresses = append(bindAddresses, "0.0.0.0")
 	}
 	if ipv6Enabled {
 		bindAddresses = append(bindAddresses, "::")
 	}
+	// Fallback to IPv4 if neither is enabled
+	if len(bindAddresses) == 0 {
+		bindAddresses = append(bindAddresses, "0.0.0.0")
+	}
 
-	addresses := []*envoy_config_core_v3.Address_SocketAddress{}
-
+	// Generate all address combinations
+	var addresses []*envoy_config_core_v3.Address_SocketAddress
 	for _, p := range ports {
 		for _, a := range bindAddresses {
 			addresses = append(addresses, &envoy_config_core_v3.Address_SocketAddress{
 				SocketAddress: &envoy_config_core_v3.SocketAddress{
-					Protocol:      envoy_config_core_v3.SocketAddress_TCP,
+					Protocol:      protocol,
 					Address:       a,
 					PortSpecifier: &envoy_config_core_v3.SocketAddress_PortValue{PortValue: p},
 				},
@@ -382,11 +410,11 @@ func getHostNetworkListenerAddresses(ports []uint32, ipv4Enabled, ipv6Enabled bo
 		}
 	}
 
-	var additionalAddress []*envoy_config_listener.AdditionalAddress
-
+	// First address is primary, rest are additional
+	var additionalAddresses []*envoy_config_listener.AdditionalAddress
 	if len(addresses) > 1 {
 		for _, a := range addresses[1:] {
-			additionalAddress = append(additionalAddress, &envoy_config_listener.AdditionalAddress{
+			additionalAddresses = append(additionalAddresses, &envoy_config_listener.AdditionalAddress{
 				Address: &envoy_config_core_v3.Address{
 					Address: a,
 				},
@@ -396,7 +424,14 @@ func getHostNetworkListenerAddresses(ports []uint32, ipv4Enabled, ipv6Enabled bo
 
 	return &envoy_config_core_v3.Address{
 		Address: addresses[0],
-	}, additionalAddress
+	}, additionalAddresses
+}
+
+func getHostNetworkListenerAddresses(ports []uint32, ipv4Enabled, ipv6Enabled bool) (*envoy_config_core_v3.Address, []*envoy_config_listener.AdditionalAddress) {
+	if !ipv4Enabled && !ipv6Enabled {
+		return nil, nil
+	}
+	return getListenerAddresses(ports, envoy_config_core_v3.SocketAddress_TCP, ipv4Enabled, ipv6Enabled)
 }
 
 func tlsPassthroughFilterChains(m *model.Model) []*envoy_config_listener.FilterChain {
@@ -432,18 +467,25 @@ func tlsPassthroughFilterChains(m *model.Model) []*envoy_config_listener.FilterC
 	return filterChains
 }
 
-func toTransportSocket(ciliumSecretNamespace string, tls []model.TLSSecret) *envoy_config_core_v3.TransportSocket {
-	var tlsSdsConfig []*envoy_extensions_transport_sockets_tls_v3.SdsSecretConfig
+// buildTLSSdsConfigs creates TLS SDS secret configs from TLS secrets.
+// It deduplicates secrets by namespace/name and returns sorted configs.
+func buildTLSSdsConfigs(ciliumSecretNamespace string, tls []model.TLSSecret) []*envoy_extensions_transport_sockets_tls_v3.SdsSecretConfig {
 	tlsMap := map[string]struct{}{}
 	for _, t := range tls {
 		tlsMap[fmt.Sprintf("%s/%s-%s", ciliumSecretNamespace, t.Namespace, t.Name)] = struct{}{}
 	}
 
+	var configs []*envoy_extensions_transport_sockets_tls_v3.SdsSecretConfig
 	for k := range tlsMap {
-		tlsSdsConfig = append(tlsSdsConfig, &envoy_extensions_transport_sockets_tls_v3.SdsSecretConfig{
+		configs = append(configs, &envoy_extensions_transport_sockets_tls_v3.SdsSecretConfig{
 			Name: k,
 		})
 	}
+	return configs
+}
+
+func toTransportSocket(ciliumSecretNamespace string, tls []model.TLSSecret) *envoy_config_core_v3.TransportSocket {
+	tlsSdsConfig := buildTLSSdsConfigs(ciliumSecretNamespace, tls)
 
 	downStreamContext := envoy_extensions_transport_sockets_tls_v3.DownstreamTlsContext{
 		CommonTlsContext: &envoy_extensions_transport_sockets_tls_v3.CommonTlsContext{
@@ -474,4 +516,121 @@ func toFilterChainMatch(hostNames []string) *envoy_config_listener.FilterChainMa
 	}
 	res.ServerNames = serverNames
 	return res
+}
+
+// toQuicTransportSocket creates a QUIC transport socket for HTTP/3
+func toQuicTransportSocket(ciliumSecretNamespace string, tls []model.TLSSecret) *envoy_config_core_v3.TransportSocket {
+	tlsSdsConfig := buildTLSSdsConfigs(ciliumSecretNamespace, tls)
+
+	downstreamTlsContext := &envoy_extensions_transport_sockets_tls_v3.DownstreamTlsContext{
+		CommonTlsContext: &envoy_extensions_transport_sockets_tls_v3.CommonTlsContext{
+			TlsCertificateSdsSecretConfigs: tlsSdsConfig,
+			AlpnProtocols:                  []string{"h3"}, // HTTP/3 ALPN
+		},
+	}
+
+	quicTransportConfig := &envoy_extensions_transport_sockets_quic_v3.QuicDownstreamTransport{
+		DownstreamTlsContext: downstreamTlsContext,
+	}
+	quicTransportBytes, _ := proto.Marshal(quicTransportConfig)
+
+	return &envoy_config_core_v3.TransportSocket{
+		Name: quicTransportSocketType,
+		ConfigType: &envoy_config_core_v3.TransportSocket_TypedConfig{
+			TypedConfig: &anypb.Any{
+				TypeUrl: "type.googleapis.com/envoy.extensions.transport_sockets.quic.v3.QuicDownstreamTransport",
+				Value:   quicTransportBytes,
+			},
+		},
+	}
+}
+
+// desiredQuicListener creates a UDP listener with QUIC transport for HTTP/3 on the specified port
+func (i *cecTranslator) desiredQuicListener(m *model.Model, port uint32) (*envoy_config_listener.Listener, error) {
+	// Get TLS secrets from HTTPS listeners (same certificates as HTTPS)
+	tlsToHostnames := m.TLSSecretsToHostnames()
+	if len(tlsToHostnames) == 0 {
+		return nil, nil
+	}
+
+	var filterChains []*envoy_config_listener.FilterChain
+
+	orderedSecrets := goslices.SortedStableFunc(maps.Keys(tlsToHostnames), func(a, b model.TLSSecret) int {
+		return cmp.Compare(a.Namespace+"/"+a.Name, b.Namespace+"/"+b.Name)
+	})
+
+	// Create HTTP Connection Manager with HTTP/3 support (shared for all filter chains)
+	http3ConnectionManagerName := fmt.Sprintf("%s-http3", listenerName)
+	http3ConnectionManager, err := i.desiredHTTPConnectionManager(http3ConnectionManagerName, "listener-secure")
+	if err != nil {
+		return nil, err
+	}
+
+	// Unmarshal to add HTTP/3 options
+	hcm := &httpConnectionManagerv3.HttpConnectionManager{}
+	if err := proto.Unmarshal(http3ConnectionManager.Any.Value, hcm); err != nil {
+		return nil, err
+	}
+
+	// For QUIC listener, we must set CodecType to HTTP3
+	// This is required by Envoy: "Non-HTTP/3 codec configured on QUIC listener"
+	hcm.CodecType = httpConnectionManagerv3.HttpConnectionManager_HTTP3
+
+	// Add HTTP/3 protocol options (optional, but recommended)
+	hcm.Http3ProtocolOptions = &envoy_config_core_v3.Http3ProtocolOptions{}
+
+	// Remove CommonHttpProtocolOptions if present, as it may conflict with HTTP/3
+	// CommonHttpProtocolOptions is for HTTP/1.1 and HTTP/2, not HTTP/3
+	hcm.CommonHttpProtocolOptions = nil
+
+	// Re-marshal
+	hcmBytes, err := proto.Marshal(hcm)
+	if err != nil {
+		return nil, err
+	}
+	http3ConnectionManager.Any.Value = hcmBytes
+
+	// For UDP/QUIC listener, we can only have ONE filter chain
+	// QUIC handles SNI internally through TLS, so we use all TLS certificates
+	// Create QUIC transport socket with all TLS certificates
+	quicTransportSocket := toQuicTransportSocket(i.Config.SecretsNamespace, orderedSecrets)
+
+	// UDP listener can only have one filter chain (no filterChainMatch for UDP)
+	// According to Envoy HTTP/3 example: only http_connection_manager filter is needed
+	// (no cilium.network filter for UDP listener)
+	filterChains = []*envoy_config_listener.FilterChain{
+		{
+			TransportSocket: quicTransportSocket,
+			Filters: []*envoy_config_listener.Filter{
+				{
+					Name: httpConnectionManagerType,
+					ConfigType: &envoy_config_listener.Filter_TypedConfig{
+						TypedConfig: http3ConnectionManager.Any,
+					},
+				},
+			},
+		},
+	}
+
+	// Create UDP listener with Host Network and IPv6 support
+	udpAddress, additionalAddresses := getListenerAddresses([]uint32{port}, envoy_config_core_v3.SocketAddress_UDP, i.Config.IPConfig.IPv4Enabled, i.Config.IPConfig.IPv6Enabled)
+	udpListener := &envoy_config_listener.Listener{
+		Name:      fmt.Sprintf("%s-udp-%d", listenerName, port),
+		Address:   udpAddress,
+		ReusePort: true, // Important for QUIC
+		UdpListenerConfig: &envoy_config_listener.UdpListenerConfig{
+			DownstreamSocketConfig: &envoy_config_core_v3.UdpSocketConfig{
+				MaxRxDatagramSize: &wrapperspb.UInt64Value{Value: 1500},
+			},
+			QuicOptions: &envoy_config_listener.QuicProtocolOptions{
+				// Empty QuicProtocolOptions enables QUIC with default settings
+			},
+		},
+		FilterChains: filterChains,
+	}
+	if len(additionalAddresses) > 0 {
+		udpListener.AdditionalAddresses = additionalAddresses
+	}
+
+	return udpListener, nil
 }
