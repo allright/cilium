@@ -188,9 +188,16 @@ func (r *gatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	setGatewayAccepted(gw, true, "Gateway successfully scheduled", gatewayv1.GatewayReasonAccepted)
 
 	// Step 3: Translate the listeners into Cilium model
+	// Check if HTTP/3 (QUIC) is enabled via Gateway annotation
+	http3Enabled := false
+	if v, ok := gw.Annotations[annotation.GatewayHTTP3Enabled]; ok && v == "true" {
+		http3Enabled = true
+	}
+
 	m := &model.Model{
 		HTTP:           httpListeners,
 		TLSPassthrough: tlsPassthroughListeners,
+		HTTP3Enabled:   http3Enabled,
 	}
 
 	// Enrich model with CircuitBreakers before translation

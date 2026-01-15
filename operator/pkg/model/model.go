@@ -21,6 +21,9 @@ type Model struct {
 	// CircuitBreakers maps Service keys (format: "namespace/name:port") to CiliumEnvoyCircuitBreaker CRDs
 	// This field is populated from Service annotations and used during cluster creation.
 	CircuitBreakers map[string]interface{} `json:"circuit_breakers,omitempty"`
+	// HTTP3Enabled indicates whether HTTP/3 (QUIC) should be enabled for HTTPS listeners.
+	// This is controlled by the cilium.io/http3-enabled annotation on the Gateway.
+	HTTP3Enabled bool `json:"http3_enabled,omitempty"`
 }
 
 func (m *Model) GetListeners() []Listener {

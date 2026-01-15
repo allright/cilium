@@ -209,6 +209,10 @@ const (
 	LBIPAMSharingAcrossNamespaceAlias = Prefix + "/lb-ipam-sharing-cross-namespace"
 
 	CECInjectCiliumFilters = CECPrefix + "/inject-cilium-filters"
+
+	// GatewayHTTP3Enabled is the annotation to enable HTTP/3 (QUIC) for a Gateway.
+	// When set to "true", UDP listeners will be created for HTTPS ports.
+	GatewayHTTP3Enabled = Prefix + "/http3-enabled"
 )
 
 // CiliumPrefixRegex is a regex matching Cilium specific annotations.
